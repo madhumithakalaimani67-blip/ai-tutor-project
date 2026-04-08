@@ -1,0 +1,5 @@
+streamlit==1.54.0
+groq==0.37.1
+python-dotenv==1.2.2
+pandas==2.3.3
+altair==6.0.0
