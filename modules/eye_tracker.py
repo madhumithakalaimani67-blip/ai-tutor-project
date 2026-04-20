@@ -35,14 +35,40 @@ def get_eye_tracker_html():
     const pipBtn = document.getElementById('pip-btn');
     
     let faceLandmarker;
+    let objectDetector;
     let lastVideoTime = -1;
-    let lookDownCounter = 0;
+    let lookDownCounter = 0, closedEyeCounter = 0, phoneCounter = 0;
+    
+    let audioCtx = null, oscillator = null;
+    function playAlarm() {
+        if(!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+        if(!oscillator) { 
+            oscillator = audioCtx.createOscillator(); oscillator.type = 'square'; 
+            oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
+            const gain = audioCtx.createGain(); gain.gain.value = 0.1;
+            oscillator.connect(gain); gain.connect(audioCtx.destination); 
+            oscillator.start(); 
+        }
+        if(audioCtx.state === 'suspended') audioCtx.resume();
+    }
+    function stopAlarm() { if(audioCtx && audioCtx.state === 'running') audioCtx.suspend(); }
+
+    function getEAR(lm, idxs) {
+        const a = Math.hypot(lm[idxs[1]].x - lm[idxs[5]].x, lm[idxs[1]].y - lm[idxs[5]].y);
+        const b = Math.hypot(lm[idxs[2]].x - lm[idxs[4]].x, lm[idxs[2]].y - lm[idxs[4]].y);
+        const c = Math.hypot(lm[idxs[0]].x - lm[idxs[3]].x, lm[idxs[0]].y - lm[idxs[3]].y);
+        return (a + b) / (2.0 * c);
+    }
 
     async function init() {
         const clips = await vision.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
         faceLandmarker = await vision.FaceLandmarker.createFromOptions(clips, {
             baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", delegate: "GPU" },
             outputFaceBlendshapes: true, runningMode: "VIDEO", numFaces: 1
+        });
+        objectDetector = await vision.ObjectDetector.createFromOptions(clips, {
+            baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite", delegate: "GPU" },
+            scoreThreshold: 0.5, runningMode: "VIDEO"
         });
         const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
         video.srcObject = stream;
@@ -52,53 +78,40 @@ def get_eye_tracker_html():
     function drawLandmarks(landmarks) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        
-        ctx.strokeStyle = "#00FF00";
-        ctx.lineWidth = 1;
-        
-        // Draw Basic Landmarks (OpenCV style)
-        landmarks.forEach(point => {
-            ctx.beginPath();
-            ctx.arc(point.x * canvas.width, point.y * canvas.height, 1, 0, 2 * Math.PI);
-            ctx.stroke();
-        });
-
-        // Specific high-visibility circles for eyes & nose
-        ctx.fillStyle = "#FF0000";
-        const indices = [1, 33, 263]; // Tip of nose, outer eyes
-        indices.forEach(idx => {
-            const p = landmarks[idx];
-            ctx.beginPath();
-            ctx.arc(p.x * canvas.width, p.y * canvas.height, 3, 0, 2 * Math.PI);
-            ctx.fill();
-        });
+        ctx.strokeStyle = "#00FF00"; ctx.lineWidth = 1;
+        landmarks.forEach(point => { ctx.beginPath(); ctx.arc(point.x * canvas.width, point.y * canvas.height, 1, 0, 2 * Math.PI); ctx.stroke(); });
     }
 
     async function predictWebcam() {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
         if (lastVideoTime !== video.currentTime) {
             lastVideoTime = video.currentTime;
-            const results = faceLandmarker.detectForVideo(video, Date.now());
-            if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-                drawLandmarks(results.faceLandmarks[0]);
+            const resFace = faceLandmarker.detectForVideo(video, Date.now());
+            const resObj = objectDetector.detectForVideo(video, Date.now());
+            
+            let phoneDetected = false;
+            if(resObj.detections) resObj.detections.forEach(d => { if(d.categories[0].categoryName === "cell phone") phoneDetected = true; });
+            if(phoneDetected) phoneCounter++; else phoneCounter = 0;
+
+            if (resFace.faceLandmarks && resFace.faceLandmarks.length > 0) {
+                drawLandmarks(resFace.faceLandmarks[0]);
+                const lm = resFace.faceLandmarks[0];
                 
-                const nose = results.faceLandmarks[0][1];
-                const forehead = results.faceLandmarks[0][10];
-                if (nose.y - forehead.y > 0.16) { 
-                    lookDownCounter++;
-                    if (lookDownCounter > 30) { statusEl.innerText = "📵 Distracted"; statusEl.style.color = "#f59e0b"; }
-                } else {
-                    lookDownCounter = 0; statusEl.innerText = "✅ Focused"; statusEl.style.color = "#10b981";
-                }
-            } else { statusEl.innerText = "🤔 User Away"; statusEl.style.color = "#94a3b8"; }
+                const avgEar = (getEAR(lm, [362,385,387,263,373,380]) + getEAR(lm, [33,160,158,133,153,144])) / 2.0;
+                if (avgEar < 0.22) closedEyeCounter++; else closedEyeCounter = 0;
+                
+                if (lm[1].y - lm[10].y > 0.16) lookDownCounter++; else lookDownCounter = 0;
+                
+                if (phoneCounter > 20) { statusEl.innerText = "📵 Phone!"; statusEl.style.color = "#ef4444"; playAlarm(); }
+                else if (closedEyeCounter > 30) { statusEl.innerText = "😴 Wake up!"; statusEl.style.color = "#ef4444"; playAlarm(); }
+                else if (lookDownCounter > 60) { statusEl.innerText = "🤔 Distracted!"; statusEl.style.color = "#f59e0b"; playAlarm(); }
+                else { statusEl.innerText = "✅ Focused"; statusEl.style.color = "#10b981"; stopAlarm(); }
+            } else { statusEl.innerText = "❌ Away"; statusEl.style.color = "#94a3b8"; stopAlarm(); }
         }
         requestAnimationFrame(predictWebcam);
     }
 
     pipBtn.onclick = () => { container.style.display = container.style.display === 'none' ? 'block' : 'none'; };
-
     let isDragging = false, offset = [0, 0];
     container.onmousedown = (e) => { isDragging = true; offset = [container.offsetLeft - e.clientX, container.offsetTop - e.clientY]; };
     document.onmousemove = (e) => { if (isDragging) { container.style.left = (e.clientX + offset[0]) + 'px'; container.style.top = (e.clientY + offset[1]) + 'px'; container.style.bottom = 'auto'; container.style.right = 'auto'; } };

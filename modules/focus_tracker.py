@@ -27,27 +27,27 @@ def main(user_id):
         pending_tasks = [t for t in tasks if t['status'] == 'pending']
         
         if pending_tasks:
-            # Checkbox List for Selection
-            selected_task_desc = None
-            for p in pending_tasks:
-                if st.checkbox(f"🎯 {p['description']}", key=f"mission_{p['id']}"):
-                    selected_task_desc = p['description']
-                    today_task = p
+            today_task = pending_tasks[0]
+            st.info(f"🚨 **TODAY'S MISSION:** {today_task['description']}")
             
-            if today_task:
-                st.info(f"⏳ **Current Focus:** {today_task['description']}")
-                
-                # --- THE VAULT: FETCH REAL BREAKDOWN FROM DB ---
-                breakdown_text = today_task.get('breakdown', '[]')
-                try:
-                    steps = json.loads(breakdown_text)
-                    if steps:
-                        with st.expander("📓 The Vault - Mission Breakdown", expanded=True):
-                            for i, step in enumerate(steps, 1):
-                                st.markdown(f"{i}. **{step}**")
-                except: pass
-            else:
-                st.caption("👈 Tick a checkbox to set your active mission.")
+            breakdown_text = today_task.get('breakdown', '[]')
+            try:
+                steps = json.loads(breakdown_text)
+                if steps:
+                    st.markdown("### ✅ Action Items Checklist")
+                    all_done = True
+                    for i, step in enumerate(steps, 1):
+                        checked = st.checkbox(f"{step}", key=f"step_{today_task['id']}_{i}")
+                        if not checked: all_done = False
+                    
+                    if all_done:
+                        st.success("🎉 **Mission Accomplished! All daily tasks completed.**")
+                        st.balloons()
+                        if st.button("Complete & Return to Dashboard", type="primary", use_container_width=True):
+                            storage.update_task_status(today_task['id'], 'done')
+                            st.session_state.navigate_to = "Dashboard"
+                            st.rerun()
+            except: pass
         else:
             st.success("✅ All missions from your current roadmap are completed!")
             if st.button("🗺️ Create New Roadmap", use_container_width=True):

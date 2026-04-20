@@ -59,6 +59,25 @@ def main():
 
     messages = json.loads(current_chat['messages'])
 
+    # --- INJECT EXTERNAL QUERY ---
+    if st.session_state.get("doubt_query"):
+        query = st.session_state.doubt_query
+        st.session_state.doubt_query = None # Clear loop
+        
+        new_id = storage.create_doubt_chat(user_id)
+        st.session_state.current_chat_id = new_id
+        
+        init_messages = [{"role": "user", "content": query}]
+        with st.spinner("AI Engineering Answer..."):
+            full_res = agent.chat(init_messages, use_vision=True)
+            if full_res and hasattr(full_res, 'choices'):
+                reply = full_res.choices[0].message.content
+                init_messages.append({"role": "assistant", "content": reply})
+                
+        storage.update_doubt_chat(new_id, init_messages)
+        storage.update_chat_title(new_id, query[:30])
+        st.rerun()
+
     # --- MAIN VIEW ---
     if not messages:
         st.markdown("<div style='height: 20vh;'></div>", unsafe_allow_html=True)

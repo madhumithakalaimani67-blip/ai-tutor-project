@@ -38,18 +38,18 @@ def main(user_id, user_profile):
             next_task = next((t for t in tasks if t['status'] == 'pending'), None)
             if next_task:
                 st.error(f"🚨 **TODAY'S MISSION:** {next_task['description'][:60]}...")
-                if st.button("🚀 RESUME JOURNEY", use_container_width=False, type="primary", key="dash_hero_btn"):
-                    st.session_state.page = "Focus Timer"
+                if st.button("🚀 RESUME JOURNEY", use_container_width=False, type="primary", key="dash_hero_btn_resume"):
+                    st.session_state.navigate_to = "Focus Timer"
                     st.rerun()
             else:
                 st.success("🎉 **ALL MISSIONS COMPLETE!**")
                 if st.button("🛣️ BUILD NEW PATH", type="primary", key="dash_new_path"):
-                    st.session_state.page = "Roadmap"
+                    st.session_state.navigate_to = "Roadmap"
                     st.rerun()
         else:
             st.info("Start by generating your first AI Roadmap!")
-            if st.button("🛣️ MAP YOUR PATH", use_container_width=False, type="primary", key="dash_hero_btn"):
-                st.session_state.page = "Roadmap"
+            if st.button("🛣️ MAP YOUR PATH", use_container_width=False, type="primary", key="dash_hero_btn_map"):
+                st.session_state.navigate_to = "Roadmap"
                 st.rerun()
                 
     with hero_col_img:
