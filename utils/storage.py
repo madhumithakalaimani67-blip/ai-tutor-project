@@ -43,11 +43,26 @@ def init_db():
         learning_style TEXT,
         daily_time TEXT,
         primary_goal TEXT,
+        known_topics TEXT,
+        target_deadline TEXT,
+        learning_reason TEXT,
+        target_certification TEXT,
+        preferred_language TEXT,
+        study_device TEXT,
+        college_company TEXT,
+        reminder_time TEXT DEFAULT '20:00',
         theme TEXT DEFAULT 'Glass (Purple)',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users (id)
     )
     """, required_columns=["user_id", "name", "theme", "primary_goal"])
+    
+    # Add new optional columns if they don't exist
+    for col in ["known_topics", "target_deadline", "learning_reason", "target_certification", "preferred_language", "study_device", "college_company", "reminder_time"]:
+        try:
+            cursor.execute(f"ALTER TABLE user_profile ADD COLUMN {col} TEXT")
+        except sqlite3.OperationalError:
+            pass # Column already exists
 
     # 4. Sessions - task_id links session to a checklist goal
     _ensure_table(cursor, "sessions", """
@@ -188,8 +203,18 @@ def verify_otp(email, code):
 # Profile Helpers
 def save_profile(user_id, data):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO user_profile (user_id, name, email, age, interests, learning_style, daily_time, primary_goal, theme) VALUES (?,?,?,?,?,?,?,?,?)", 
-                   (user_id, data.get("name"), data.get("email"), data.get("age"), data.get("interests"), data.get("learning_style"), data.get("daily_time"), data.get("primary_goal"), data.get("theme", "Glass (Purple)")))
+    cursor.execute("""
+        INSERT OR REPLACE INTO user_profile (
+            user_id, name, email, age, interests, learning_style, daily_time, primary_goal, theme,
+            known_topics, target_deadline, learning_reason, target_certification, preferred_language, study_device, college_company, reminder_time
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        user_id, data.get("name"), data.get("email"), data.get("age"), data.get("interests"), 
+        data.get("learning_style"), data.get("daily_time"), data.get("primary_goal"), data.get("theme", "Glass (Purple)"),
+        data.get("known_topics", ""), data.get("target_deadline", ""), data.get("learning_reason", ""),
+        data.get("target_certification", ""), data.get("preferred_language", ""), data.get("study_device", ""),
+        data.get("college_company", ""), data.get("reminder_time", "20:00")
+    ))
     conn.commit(); conn.close()
 
 def get_profile(user_id):
@@ -197,6 +222,12 @@ def get_profile(user_id):
     try: cursor.execute("SELECT * FROM user_profile WHERE user_id = ?", (user_id,))
     except: conn.close(); init_db(); return None
     row = cursor.fetchone(); conn.close(); return dict(row) if row else None
+
+def get_all_profiles():
+    conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row; cursor = conn.cursor()
+    try: cursor.execute("SELECT * FROM user_profile")
+    except: conn.close(); return []
+    rows = cursor.fetchall(); conn.close(); return [dict(r) for r in rows]
 
 def update_theme(user_id, theme_name):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()

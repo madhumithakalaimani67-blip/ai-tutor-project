@@ -1,131 +1,127 @@
 import streamlit as st
 import json
 import base64
-from utils import ai_helper, storage
+from utils import ai_helper, storage, ui_helper
 
 def main():
-    user_id = st.session_state.get('user_id')
-    agent = ai_helper.get_ai_agent()
+    user_id    = st.session_state.get('user_id')
+    agent      = ai_helper.get_ai_agent()
+    user_chats = storage.get_user_doubt_chats(user_id)
 
-    # --- SIDEBAR: ChatGPT-Style Persistence ---
+    main_col = st.container()
+
+    # ── SIDEBAR Branding & Navigation ──
     with st.sidebar:
-        # 1. Search Bar
-        st.write("<div style='height: 1.5rem'></div>", unsafe_allow_html=True)
-        st.text_input("🔍 Search chats", placeholder="Search...", label_visibility="collapsed")
-        
-        # 2. New Chat Button (Prominent)
-        if st.button("➕ New chat", use_container_width=True, key="new_chat_btn_v7"):
+        ui_helper.render_sidebar_branding()
+        st.markdown("## 🧠 Solver")
+        if st.button("➕ New Chat", use_container_width=True, type="primary", key="new_chat_btn"):
             new_id = storage.create_doubt_chat(user_id)
-            st.session_state.current_chat_id = new_id
+            st.session_state.current_chat_id   = new_id
             st.session_state.last_processed_id = None
             st.rerun()
-        
         st.markdown("---")
-        st.markdown("<p style='opacity: 0.5; font-size: 0.8rem; margin-bottom: 0.5rem;'>YOUR CHATS</p>", unsafe_allow_html=True)
-        
-        # 3. Chat History
-        user_chats = storage.get_user_doubt_chats(user_id)
-        for chat in user_chats:
+        search = st.text_input("🔍", placeholder="Search chats...", label_visibility="collapsed", key="doubt_search")
+        filtered = [c for c in user_chats if search.lower() in (c['title'] or '').lower()] if search else user_chats
+        for chat in filtered:
             chat_id = chat['id']
-            chat_title = chat['title'] if chat['title'] != 'New Chat' else f"Chat {chat_id}"
-            is_active = st.session_state.get('current_chat_id') == chat_id
-            
-            c_link, c_del = st.columns([5, 1])
-            with c_link:
-                if st.button(f"💬 {chat_title[:20]}", key=f"chat_nav_{chat_id}", use_container_width=True, type="secondary" if not is_active else "primary"):
-                    st.session_state.current_chat_id = chat_id
+            title   = chat['title'] if chat['title'] != 'New Chat' else f"Chat {chat_id}"
+            active  = st.session_state.get('current_chat_id') == chat_id
+            c1, c2  = st.columns([5, 1])
+            with c1:
+                if st.button(f"💬 {title[:16]}", key=f"chat_{chat_id}",
+                             use_container_width=True,
+                             type="primary" if active else "secondary"):
+                    st.session_state.current_chat_id   = chat_id
                     st.session_state.last_processed_id = None
                     st.rerun()
-            with c_del:
-                if st.button("🗑️", key=f"chat_del_{chat_id}"):
+            with c2:
+                if st.button("🗑", key=f"del_{chat_id}"):
                     storage.delete_doubt_chat(chat_id)
                     if st.session_state.get('current_chat_id') == chat_id:
                         st.session_state.current_chat_id = None
                     st.rerun()
 
-    # --- SESSION RECOVERY ---
-    if not st.session_state.get('current_chat_id'):
-        if user_chats:
-            st.session_state.current_chat_id = user_chats[0]['id']
-        else:
-            new_id = storage.create_doubt_chat(user_id)
-            st.session_state.current_chat_id = new_id
+    # ── MAIN ──
+    with main_col:
+        # Session init
+        if not st.session_state.get('current_chat_id'):
+            if user_chats:
+                st.session_state.current_chat_id = user_chats[0]['id']
+            else:
+                new_id = storage.create_doubt_chat(user_id)
+                st.session_state.current_chat_id = new_id
+                st.rerun()
+
+        current_chat = storage.get_doubt_chat_by_id(st.session_state.current_chat_id)
+        if not current_chat:
+            st.session_state.current_chat_id = None
             st.rerun()
 
-    current_chat = storage.get_doubt_chat_by_id(st.session_state.current_chat_id)
-    if not current_chat:
-        st.session_state.current_chat_id = None
-        st.rerun()
+        messages = json.loads(current_chat['messages'])
 
-    messages = json.loads(current_chat['messages'])
+        # External query from roadmap links
+        if st.session_state.get("doubt_query"):
+            query  = st.session_state.doubt_query
+            st.session_state.doubt_query = None
+            new_id = storage.create_doubt_chat(user_id)
+            st.session_state.current_chat_id = new_id
+            init_msgs = [{"role":"user","content":query}]
+            with st.spinner("Solving..."):
+                res = agent.chat(init_msgs, use_vision=True)
+                if res and hasattr(res,'choices'):
+                    init_msgs.append({"role":"assistant","content":res.choices[0].message.content})
+            storage.update_doubt_chat(new_id, init_msgs)
+            storage.update_chat_title(new_id, query[:30])
+            st.rerun()
 
-    # --- MAIN VIEW ---
-    if not messages:
-        st.markdown("<div style='height: 20vh;'></div>", unsafe_allow_html=True)
-        st.markdown("<h1 style='text-align: center; font-size: 3.5rem; opacity: 0.95; font-weight: 700; margin-bottom: 0.5rem;'>What mission can I help you solve?</h1>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; opacity: 0.6; font-size: 1.2rem;'>Ask anything. Upload details. Let's solve it.</p>", unsafe_allow_html=True)
-    else:
-        st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
-        for msg in messages:
-            avatar = "🧠" if msg["role"] == "assistant" else None
-            name = "EDUAI" if msg["role"] == "assistant" else "Learner"
-            with st.chat_message(msg["role"], avatar=avatar):
-                st.markdown(f"**{name}**")
-                st.markdown(msg["content"])
-                if "image" in msg:
-                    st.image(msg["image"], width=400)
+        # Chat display
+        if not messages:
+            st.markdown("<div style='height:15vh;'></div>", unsafe_allow_html=True)
+            st.markdown("<h2 style='text-align:center;'>What can I help you solve? 🧠</h2>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align:center;opacity:0.6;'>Ask anything or upload a photo of your problem.</p>", unsafe_allow_html=True)
+        else:
+            for msg in messages:
+                avatar = "🧠" if msg["role"] == "assistant" else None
+                with st.chat_message(msg["role"], avatar=avatar):
+                    st.markdown(f"**{'EDUAI' if msg['role']=='assistant' else 'You'}**")
+                    st.markdown(msg["content"])
+                    if "image" in msg:
+                        st.image(msg["image"], width=400)
 
-    # --- STICKY FOOTER INPUT ---
-    st.markdown("<div style='height: 15vh;'></div>", unsafe_allow_html=True)
-    _, mid_bar, _ = st.columns([1, 4, 1])
-    with mid_bar:
-        # Integrated Camera Icon inside popover
+        # Input row
         c_cam, c_txt = st.columns([1, 10])
         with c_cam:
             with st.popover("📸"):
                 st.caption("Upload problem photo")
-                uploaded_file = st.file_uploader("Select Image", type=["jpg", "jpeg", "png"], label_visibility="collapsed", key=f"up_{st.session_state.current_chat_id}")
+                uploaded = st.file_uploader("Image", type=["jpg","jpeg","png"],
+                                            label_visibility="collapsed",
+                                            key=f"up_{st.session_state.current_chat_id}")
         with c_txt:
             prompt = st.chat_input("Ask me anything...")
 
-    # --- INTERACTION GUARD & PROCESSING ---
-    interaction_id = f"{prompt}_{uploaded_file.name if uploaded_file else ''}_{len(messages)}"
-    if (prompt or uploaded_file) and st.session_state.get("last_processed_id") != interaction_id:
-        st.session_state.last_processed_id = interaction_id
-        
-        # 1. Update List
-        img_b64 = None
-        if uploaded_file:
-            img_b64 = base64.b64encode(uploaded_file.read()).decode()
-            messages.append({"role": "user", "content": prompt or "Image Answer Request", "image": f"data:image/jpeg;base64,{img_b64}"})
-        else:
-            messages.append({"role": "user", "content": prompt})
+        interaction_id = f"{prompt}_{uploaded.name if uploaded else ''}_{len(messages)}"
+        if (prompt or uploaded) and st.session_state.get("last_processed_id") != interaction_id:
+            st.session_state.last_processed_id = interaction_id
+            if uploaded:
+                img_b64 = base64.b64encode(uploaded.read()).decode()
+                messages.append({"role":"user","content":prompt or "Solve this image","image":f"data:image/jpeg;base64,{img_b64}"})
+            else:
+                messages.append({"role":"user","content":prompt})
 
-        # 2. Get Response
-        with st.chat_message("assistant", avatar="🧠"):
-            st.markdown(f"**EDUAI**")
-            with st.spinner("AI Engineering Answer..."):
-                # Always use vision-aware chat for consistency
-                full_res = agent.chat(messages, use_vision=True)
-                if full_res and hasattr(full_res, 'choices'):
-                    reply = full_res.choices[0].message.content
-                    st.markdown(reply)
-                    messages.append({"role": "assistant", "content": reply})
-                else:
-                    st.error("I'm sorry, I encountered a minor hiccup. Please try again.")
+            with st.chat_message("assistant", avatar="🧠"):
+                st.markdown("**EDUAI**")
+                with st.spinner("Thinking..."):
+                    res = agent.chat(messages, use_vision=True)
+                    if res and hasattr(res,'choices'):
+                        reply = res.choices[0].message.content
+                        st.markdown(reply)
+                        messages.append({"role":"assistant","content":reply})
+                    else:
+                        st.error("Something went wrong. Try again.")
 
-        # 3. Auto-Save & Auto-Title
-        storage.update_doubt_chat(st.session_state.current_chat_id, messages)
-        
-        user_msg_count = len([m for m in messages if m['role'] == 'user'])
-        if user_msg_count == 1 and (current_chat['title'] == 'New Chat'):
-            title_p = f"Create a short 3-word title for this doubt: {prompt or 'Image doubt'}. No quotes."
-            title_res = agent.chat([{"role": "user", "content": title_p}])
-            if title_res and hasattr(title_res, 'choices'):
-                new_title = title_res.choices[0].message.content.strip()[:30]
-                storage.update_chat_title(st.session_state.current_chat_id, new_title)
-        
-        st.rerun()
-
-if __name__ == "__main__":
-    main()
+            storage.update_doubt_chat(st.session_state.current_chat_id, messages)
+            if len([m for m in messages if m['role']=='user'])==1 and current_chat['title']=='New Chat':
+                res2 = agent.chat([{"role":"user","content":f"3-word title for: {prompt or 'image doubt'}. No quotes."}])
+                if res2 and hasattr(res2,'choices'):
+                    storage.update_chat_title(st.session_state.current_chat_id, res2.choices[0].message.content.strip()[:30])
+            st.rerun()
