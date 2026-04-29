@@ -31,7 +31,7 @@ def init_scheduler():
                 studied_today = False
                 for s in sessions:
                     try:
-                        s_time = datetime.strptime(s["start_time"], "%a %b %d %H:%M:%S %Y")
+                        s_time = datetime.strptime(s["start_time"], "%Y-%m-%d %H:%M:%S")
                         if s_time.date() == now.date():
                             studied_today = True; break
                     except: pass

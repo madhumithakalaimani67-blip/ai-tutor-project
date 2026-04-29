@@ -76,12 +76,15 @@ def init_db():
         actual_duration INTEGER,
         focus_score INTEGER,
         distraction_count INTEGER DEFAULT 0,
+        drowsy_count INTEGER DEFAULT 0,
+        phone_count INTEGER DEFAULT 0,
+        zone_out_count INTEGER DEFAULT 0,
         pause_count INTEGER DEFAULT 0,
         notes TEXT,
         FOREIGN KEY (user_id) REFERENCES users (id),
         FOREIGN KEY (task_id) REFERENCES tasks (id)
     )
-    """, required_columns=["user_id", "task_id", "distraction_count", "pause_count"])
+    """, required_columns=["user_id", "task_id", "distraction_count", "drowsy_count", "phone_count", "zone_out_count", "pause_count"])
 
     # 5. Roadmaps
     cursor.execute("""
@@ -105,12 +108,13 @@ def init_db():
         description TEXT,
         status TEXT DEFAULT 'pending', 
         week INTEGER,
+        day INTEGER,
         order_num INTEGER,
         breakdown TEXT, -- JSON string of sub-tasks
         FOREIGN KEY (user_id) REFERENCES users (id),
         FOREIGN KEY (roadmap_id) REFERENCES roadmaps (id)
     )
-    """, required_columns=["user_id", "breakdown"])
+    """, required_columns=["user_id", "breakdown", "day"])
 
     # 7. Notes (Knowledge Vault)
     cursor.execute("""
@@ -149,10 +153,15 @@ def _ensure_table(cursor, table_name, create_sql, required_columns):
         else:
             missing = [c for c in required_columns if c not in existing_cols]
             if missing:
-                # Instead of dropping (Data Loss!), we should try to add columns if possible.
-                # However, for this upgrade, we'll recreate if critical columns like task_id are missing.
-                cursor.execute(f"DROP TABLE {table_name}")
-                cursor.execute(create_sql)
+                # Safely add missing columns
+                for col in missing:
+                    try:
+                        # Find the definition of the missing column in create_sql if possible
+                        # For simplicity in this dev environment, we add as TEXT or INTEGER appropriately
+                        col_type = "INTEGER DEFAULT 0" if "count" in col or col in ["week", "day", "order_num"] else "TEXT"
+                        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col} {col_type}")
+                    except sqlite3.OperationalError:
+                        pass # Might already exist or something else went wrong
     except Exception:
         cursor.execute(create_sql)
 
@@ -237,8 +246,18 @@ def update_theme(user_id, theme_name):
 # Session Helpers
 def save_session(user_id, data):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
-    cursor.execute("INSERT INTO sessions (user_id, task_id, start_time, end_time, planned_duration, actual_duration, focus_score, distraction_count, pause_count, notes) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                   (user_id, data.get("task_id"), data.get("start_time"), data.get("end_time"), data.get("planned_duration"), data.get("actual_duration"), data.get("focus_score"), data.get("distraction_count",0), data.get("pause_count",0), data.get("notes")))
+    cursor.execute("""
+        INSERT INTO sessions (
+            user_id, task_id, start_time, end_time, planned_duration, 
+            actual_duration, focus_score, distraction_count, pause_count, 
+            notes, drowsy_count, phone_count, zone_out_count
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        user_id, data.get("task_id"), data.get("start_time"), data.get("end_time"), 
+        data.get("planned_duration"), data.get("actual_duration"), data.get("focus_score"), 
+        data.get("distraction_count", 0), data.get("pause_count", 0), data.get("notes"),
+        data.get("drowsy_count", 0), data.get("phone_count", 0), data.get("zone_out_count", 0)
+    ))
     conn.commit(); conn.close()
 
 def get_sessions(user_id):
@@ -253,14 +272,26 @@ def delete_session(sid):
 
 def get_streak(user_id):
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
+    # Use SQLite's date() function which works best with YYYY-MM-DD
     cursor.execute("SELECT DISTINCT date(start_time) as d FROM sessions WHERE user_id = ? ORDER BY d DESC", (user_id,))
     rows = cursor.fetchall(); conn.close()
     if not rows: return 0
-    from datetime import datetime
-    streak = 1
-    for i in range(1, len(rows)):
-        if (datetime.strptime(rows[i-1][0],"%Y-%m-%d") - datetime.strptime(rows[i][0],"%Y-%m-%d")).days == 1: streak += 1
-        else: break
+    from datetime import datetime, timedelta
+    streak = 0
+    today = datetime.now().date()
+    
+    # Check if they studied today or yesterday to continue streak
+    try:
+        last_study = datetime.strptime(rows[0][0], "%Y-%m-%d").date()
+        if (today - last_study).days > 1: return 0 # Streak broken
+        
+        streak = 1
+        for i in range(1, len(rows)):
+            prev = datetime.strptime(rows[i-1][0], "%Y-%m-%d").date()
+            curr = datetime.strptime(rows[i][0], "%Y-%m-%d").date()
+            if (prev - curr).days == 1: streak += 1
+            else: break
+    except: return 0
     return streak
 
 # Roadmap & Task Helpers
@@ -275,13 +306,29 @@ def get_latest_roadmap(user_id):
     cursor.execute("SELECT * FROM roadmaps WHERE user_id = ? ORDER BY created_at DESC LIMIT 1", (user_id,))
     row = cursor.fetchone(); conn.close(); return dict(row) if row else None
 
+def get_all_roadmaps(user_id):
+    conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row; cursor = conn.cursor()
+    cursor.execute("SELECT * FROM roadmaps WHERE user_id = ? ORDER BY created_at DESC", (user_id,))
+    rows = cursor.fetchall(); conn.close(); return [dict(r) for r in rows]
+
+def get_roadmap_by_id(user_id, roadmap_id):
+    conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row; cursor = conn.cursor()
+    cursor.execute("SELECT * FROM roadmaps WHERE user_id = ? AND id = ?", (user_id, roadmap_id))
+    row = cursor.fetchone(); conn.close(); return dict(row) if row else None
+
 def save_tasks(user_id, roadmap_id, task_list):
-    """Saves a list of tasks for a roadmap."""
+    """Saves a list of tasks for a roadmap including week, day, and breakdown."""
     conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
     for t in task_list:
-        breakdown_json = json.dumps(t.get('vault_breakdown', []))
-        cursor.execute("INSERT INTO tasks (user_id, roadmap_id, description, week, order_num, breakdown) VALUES (?, ?, ?, ?, ?, ?)", 
-                       (user_id, roadmap_id, t['desc'], t.get('week', 1), t.get('order', 0), breakdown_json))
+        breakdown_json = json.dumps(t.get('vault_breakdown', t.get('subtasks', [])))
+        cursor.execute("""
+            INSERT INTO tasks (user_id, roadmap_id, description, week, day, order_num, breakdown) 
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_id, roadmap_id, t.get('desc', t.get('task')), 
+            t.get('week', 1), t.get('day', 1), t.get('order', 0), 
+            breakdown_json
+        ))
     conn.commit(); conn.close()
 
 def get_tasks(user_id, roadmap_id):

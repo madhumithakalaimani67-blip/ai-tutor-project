@@ -13,7 +13,7 @@ class EDUAIAgent:
         
         self.client = Groq(api_key=api_key)
         self.model = "llama-3.3-70b-versatile"
-        self.vision_model = "llama-3.2-11b-vision-preview"
+        self.vision_model = "meta-llama/llama-4-scout-17b-16e-instruct"
 
     def get_system_prompt(self, user_profile=None):
         profile_context = ""
