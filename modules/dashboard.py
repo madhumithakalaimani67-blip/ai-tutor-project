@@ -8,14 +8,15 @@ def main(user_id, user_profile):
     streak = storage.get_streak(user_id)
     total_mins = sum([s["actual_duration"] for s in sessions]) if sessions else 0
     
-    latest_roadmap = storage.get_latest_roadmap(user_id)
+    current_rm_id = st.session_state.get("current_roadmap_id")
+    active_roadmap = storage.get_roadmap_by_id(user_id, current_rm_id) if current_rm_id else storage.get_latest_roadmap(user_id)
     progress_perc = 0
     tasks = []
-    if latest_roadmap:
-        tasks = storage.get_tasks(user_id, latest_roadmap['id']) or []
+    if active_roadmap:
+        tasks = storage.get_tasks(user_id, active_roadmap['id']) or []
         if tasks:
             done = len([t for t in tasks if t['status'] == 'done'])
-            progress_perc = int((done / len(tasks)) * 100)
+            progress_perc = round((done / len(tasks)) * 100, 1)
 
     # --- HERO LANDING SECTION ---
     hero_col_text, hero_col_img = st.columns([1.2, 1])
@@ -34,10 +35,10 @@ def main(user_id, user_profile):
         
         st.markdown(f"<p style='font-size: 1.15rem; opacity: 0.8; margin-bottom: 25px;'>Your dedicated AI workspace is ready. Stay focused, track your progress, and master your path.</p>", unsafe_allow_html=True)
         
-        if latest_roadmap:
+        if active_roadmap:
             next_task = next((t for t in tasks if t['status'] == 'pending'), None)
             if next_task:
-                st.error(f"🚨 **TODAY'S MISSION:** {next_task['description'][:60]}...")
+                st.error(f"🎯 **NEXT MISSION:** {next_task['description'][:60]}...")
                 if st.button("🚀 RESUME JOURNEY", use_container_width=False, type="primary", key="dash_hero_btn_resume"):
                     st.session_state.navigate_to = "Focus Timer"
                     st.rerun()
@@ -80,7 +81,7 @@ def main(user_id, user_profile):
             st.markdown(f"""
             <h3 style="margin-top:0;">🚀 Progress</h3>
             <h2 style="margin-bottom:0;">{progress_perc}%</h2>
-            <p style="opacity:0.6;">Goal: {latest_roadmap['goal'][:15] if latest_roadmap else 'None'}</p>
+            <p style="opacity:0.6;">Goal: {active_roadmap['goal'][:15] if active_roadmap else 'None'}</p>
             """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
