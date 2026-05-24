@@ -28,7 +28,7 @@ def init_scheduler():
             if not rem_time: continue
             try: rh, rm = map(int, rem_time.split(":"))
             except: continue
-            if now.hour == rh:
+            if now.hour == rh and abs(now.minute - rm) <= 10:
                 sessions = storage.get_sessions(uid)
                 studied_today = False
                 for s in sessions:
@@ -40,10 +40,9 @@ def init_scheduler():
                 if not studied_today:
                     streak = storage.get_streak(uid)
                     email_helper.send_reminder_email(p.get("email"), p.get("name"), streak)
-    scheduler.add_job(check_reminders, 'cron', minute=0)
+    scheduler.add_job(check_reminders, 'interval', minutes=15)
     scheduler.start()
     return scheduler
-
 _ = init_scheduler()
 
 if "authenticated" not in st.session_state:
